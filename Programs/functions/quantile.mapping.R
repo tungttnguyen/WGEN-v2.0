@@ -83,7 +83,7 @@ quantile.mapping <- function(prcp.site,Sbasin,thshd.prcp,perc.q,emission.old1,em
     prcp.site.u2.proposed <- lapply(prcp.site.z2.proposed,function(x){pnorm(x)})
 
     #accept proposed u with probability proportional to ratio of old and new exceedance ratios
-    set.seed(1)
+    # set.seed(1) # DO NOT set.seed here to ensure reproducibility when parallelization  
     samp.cf <- rnorm(n,0,1)
     samp2.cf <- sapply(1:n.sites,function(x) {samp.cf[idx2[[x]]]})
     coin.flip <- lapply(samp2.cf,function(x){pnorm(x)})

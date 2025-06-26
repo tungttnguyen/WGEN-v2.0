@@ -76,7 +76,11 @@ execute.simulations <- function(){
   ##########################Simulate model with perturbations#######################################
 
   #run the daily weather generate num.iter times using the num.iter Markov chains
-  mc.sim <- resampled.date.sim <- resampled.date.loc.sim <- prcp.site.sim <- tmin.site.sim <- tmax.site.sim <-  list()
+  # mc.sim <- resampled.date.sim <- resampled.date.loc.sim <- prcp.site.sim <- tmin.site.sim <- tmax.site.sim <-  list()
+  mc.sim <- vector("list", num.iter)
+  resampled.date.sim <- vector("list", num.iter)
+  resampled.date.loc.sim <- vector("list", num.iter)
+  prcp.site.sim <- tmax.site.sim <- tmin.site.sim <- vector("list", num.iter)
   start_time <- Sys.time()
   for (k in 1:num.iter) {
     my.itertime <- Sys.time()
@@ -99,60 +103,62 @@ execute.simulations <- function(){
   #remove for memory
   rm(my.sim)
   
+  # set.seed(1)   #this ensures the copula-based jitterrs are always performed in the same way for each climate change  
+  if (!require("future.apply")) install.packages("future.apply")
+  library(future.apply)
+  num_cores <- parallel::detectCores() - 1
+  if (num_cores < 1) num_cores <- 1  
+  plan(multisession, workers = num_cores)
   
-  #once the simulations are created, we now apply post-process climate changes (and jitters)
-  for (change in 1:nrow(change.list)) {
-    start_time <- Sys.time()
+  # Parallelize the change.list loop
+  future_lapply(seq_len(nrow(change.list)), function(change) {
     cur.tc.max <- change.list$tc.max[change]
     cur.tc.min <- change.list$tc.min[change]
-    cur.pccc <- change.list$pccc[change]
-    cur.pmuc <- change.list$pmuc[change]
-    
-    cur.tc <- mean(cur.tc.max,cur.tc.min)
-    
-    #precipitation scaling (temperature change dependent)
-    perc.q <- (1 + cur.pccc)^cur.tc    #scaling in the upper tail for each month of non-zero prcp
-    perc.mu <- (1 + cur.pmuc)          #scaling in the mean for each month of non-zero prcp
-    
-    #set the jitter
+    cur.pccc   <- change.list$pccc[change]
+    cur.pmuc   <- change.list$pmuc[change]
+    cur.tc     <- mean(cur.tc.max, cur.tc.min)
+    perc.q     <- (1 + cur.pccc)^cur.tc
+    perc.mu    <- (1 + cur.pmuc)
     cur.jitter <- to.jitter
     
-    #perturb the climate from the simulations above (the longest procedure in this function is saving the output files)
-    set.seed(1)   #this ensures the copula-based jitterrs are always performed in the same way for each climate change
-    perturbed.sim <-  perturb.climate(prcp.site.sim=prcp.site.sim,
-                                      tmin.site.sim=tmin.site.sim,
-                                      tmax.site.sim=tmax.site.sim,
-                                      emission.fits.site=emission.fits.site,
-                                      months=months,dates.sim=dates.sim,n.sites=n.sites,
-                                      qq=qq,perc.mu=perc.mu,perc.q=perc.q,Sbasin=Sbasin,cur.jitter=cur.jitter,
-                                      cur.tc.min=cur.tc.min,cur.tc.max=cur.tc.max,
-                                      num.iter=num.iter,thshd.prcp=thshd.prcp,qq.month=qq.month)
-    set.seed(NULL)
+    # No need to set.seed(1) here; future_lapply with future.seed=1 will handle it
+    perturbed.sim <- perturb.climate(
+      prcp.site.sim = prcp.site.sim,
+      tmin.site.sim = tmin.site.sim,
+      tmax.site.sim = tmax.site.sim,
+      emission.fits.site = emission.fits.site,
+      months = months, dates.sim = dates.sim, n.sites = n.sites,
+      qq = qq, perc.mu = perc.mu, perc.q = perc.q, Sbasin = Sbasin, cur.jitter = cur.jitter,
+      cur.tc.min = cur.tc.min, cur.tc.max = cur.tc.max,
+      num.iter = num.iter, thshd.prcp = thshd.prcp, qq.month = qq.month
+    )
+    
     prcp.site.sim.perturbed <- perturbed.sim[[1]]
     tmin.site.sim.perturbed <- perturbed.sim[[2]]
     tmax.site.sim.perturbed <- perturbed.sim[[3]]
     
-    #remove for memory
-    rm(perturbed.sim)
-    end_time <- Sys.time(); run.time.qmap <- end_time - start_time
-    print(paste("QMAPPING started at:",start_time,", ended at:",end_time)); print(round(run.time.qmap,2))
+    file.suffix <- paste0(
+      ".tmax.", cur.tc.max, ".tmin.", cur.tc.min,
+      "_p.CC.scale.", cur.pccc, "_p.mu.scale.", cur.pmuc,
+      "_num.year.", number.years.long, "_with.", num.iter
+    )
     
-    #how to name each file name to track perturbations in each set of simulations
-    file.suffix <- paste0(".tmax.",cur.tc.max,".tmin.",cur.tc.min,"_p.CC.scale.",cur.pccc,"_p.mu.scale.",cur.pmuc,"_num.year.",number.years.long,"_with.",num.iter)
-    
-    print(paste("|---start saving---|"))
-    write.output.large(dir.to.sim.files,
-                       prcp.site.sim=prcp.site.sim.perturbed,
-                       tmin.site.sim=tmin.site.sim.perturbed,
-                       tmax.site.sim=tmax.site.sim.perturbed,
-                       mc.sim=mc.sim,resampled.date.sim=resampled.date.sim,
-                       dates.sim=dates.sim,file.suffix=file.suffix)
-    print(paste("|---finished saving---|"))
-    
-  }
+    write.output.large(
+      dir.to.sim.files,
+      prcp.site.sim = prcp.site.sim.perturbed,
+      tmin.site.sim = tmin.site.sim.perturbed,
+      tmax.site.sim = tmax.site.sim.perturbed,
+      mc.sim = mc.sim, resampled.date.sim = resampled.date.sim,
+      dates.sim = dates.sim, file.suffix = file.suffix
+    )
+    NULL
+  }, future.seed = 1L)
+  
+  plan(sequential) 
   
   #remove for memory
-  rm(resampled.date.sim,resampled.date.loc.sim,markov.chain.sim,mc.sim)
+  rm(resampled.date.sim, resampled.date.loc.sim,markov.chain.sim,mc.sim)
+  
   ##################################################################################################
   print(paste0("--- done.  state= ", num.states," --- ensemble member:",num.iter))
   gc()
